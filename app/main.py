@@ -2,9 +2,22 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.staticfiles import StaticFiles
+import os
+from pathlib import Path
 from .core.config import settings
 from .api.routes.scraper import router as scraper_router
 from .api.routes.product import router as product_router
+from .api.endpoints.url_to_video import router as url_to_video_router
+
+# Create necessary directories
+BASE_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = BASE_DIR / "static"
+VIDEOS_DIR = BASE_DIR / "output"
+
+# Create directories if they don't exist
+STATIC_DIR.mkdir(exist_ok=True)
+VIDEOS_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -16,11 +29,13 @@ app = FastAPI(
     * Product information extraction from Shopify stores
     * Video generation from product data
     * Status tracking for video generation jobs
+    * URL to Video conversion with AI-powered script generation
     
     ## API Endpoints
     * `/analyze-url` - Extract product information from a URL
     * `/generate-video` - Generate a video ad from product data
     * `/video-status/{job_id}` - Check video generation status
+    * `/process-url` - Convert product URL to video ad scripts
     """,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     docs_url=None,  # Disable default docs
@@ -36,6 +51,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/videos", StaticFiles(directory=str(VIDEOS_DIR)), name="videos")
+
 # Include routers
 app.include_router(
     scraper_router,
@@ -47,6 +66,12 @@ app.include_router(
     product_router,
     prefix=f"{settings.API_V1_STR}/products",
     tags=["products"]
+)
+
+app.include_router(
+    url_to_video_router,
+    prefix=f"{settings.API_V1_STR}/url-to-video",
+    tags=["url-to-video"]
 )
 
 @app.get("/")
