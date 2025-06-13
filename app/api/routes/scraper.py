@@ -17,6 +17,21 @@ class URLInput(BaseModel):
         example="https://shopify.supply/products/get-ship-done-hat-2-1"
     )
 
+class APIResponse(BaseModel):
+    """Standard API response model."""
+    status: str = Field(..., description="Response status (success/error)", example="success")
+    message: str = Field(..., description="Response message", example="Product information extracted successfully")
+    data: Optional[Dict[str, Any]] = Field(None, description="Response data")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "status": "success",
+                "message": "Operation completed successfully",
+                "data": {}
+            }
+        }
+
 class ProductData(BaseModel):
     """Model representing extracted product information."""
     title: str = Field(..., description="Product title", example="Get Ship Done Hat 2.0")
@@ -28,12 +43,69 @@ class ProductData(BaseModel):
     features: List[str] = Field(default_factory=list, description="List of product features")
     brand: str = Field("", description="Product brand", example="Shopify Supply")
     variants: List[Dict[str, Any]] = Field(default_factory=list, description="Product variants")
+    videos: List[Dict[str, Any]] = Field(default_factory=list, description="List of product video media (src, poster, alt)")
 
-class APIResponse(BaseModel):
-    """Standard API response model."""
-    status: str = Field(..., description="Response status (success/error)", example="success")
-    message: str = Field(..., description="Response message", example="Product information extracted successfully")
-    data: Optional[Dict[str, Any]] = Field(None, description="Response data")
+    class Config:
+        schema_extra = {
+            "example": {
+                "title": "Get Ship Done Hat 2.0",
+                "description": "Push to prod in style with the Get Ship Done Hat 2.0",
+                "price": 15.00,
+                "currency": "USD",
+                "status": "Sold out",
+                "images": [
+                    "https://cdn.shopify.com/s/files/1/0000/0000/products/hat.jpg"
+                ],
+                "features": [
+                    "100% cotton twill",
+                    "Adjustable strap with metal buckle"
+                ],
+                "brand": "Shopify Supply",
+                "variants": [],
+                "videos": [
+                    {
+                        "src": "https://cdn.shopify.com/oxygen-v2/25850/10228/21102/1915254/assets/collection-entrepreneur-essentials-video-DBv33N9g.mp4",
+                        "poster": "https://cdn.shopify.com/oxygen-v2/25850/10228/21102/1915254/assets/collection-entrepreneur-essentials-min-DrPrTYOl.jpg",
+                        "alt": "Entrepreneur Essentials Collection"
+                    }
+                ]
+            }
+        }
+
+class ProductResponse(APIResponse):
+    """Response model for product data."""
+    data: Optional[ProductData] = Field(None, description="Extracted product data")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "status": "success",
+                "message": "Product information extracted successfully",
+                "data": {
+                    "title": "Get Ship Done Hat 2.0",
+                    "description": "Push to prod in style with the Get Ship Done Hat 2.0",
+                    "price": 15.00,
+                    "currency": "USD",
+                    "status": "Sold out",
+                    "images": [
+                        "https://cdn.shopify.com/s/files/1/0000/0000/products/hat.jpg"
+                    ],
+                    "features": [
+                        "100% cotton twill",
+                        "Adjustable strap with metal buckle"
+                    ],
+                    "brand": "Shopify Supply",
+                    "variants": [],
+                    "videos": [
+                        {
+                            "src": "https://cdn.shopify.com/oxygen-v2/25850/10228/21102/1915254/assets/collection-entrepreneur-essentials-video-DBv33N9g.mp4",
+                            "poster": "https://cdn.shopify.com/oxygen-v2/25850/10228/21102/1915254/assets/collection-entrepreneur-essentials-min-DrPrTYOl.jpg",
+                            "alt": "Entrepreneur Essentials Collection"
+                        }
+                    ]
+                }
+            }
+        }
 
 class VideoGenerationRequest(BaseModel):
     """Input model for video generation requests."""
@@ -48,13 +120,47 @@ class VideoGenerationRequest(BaseModel):
         example="modern"
     )
 
+    class Config:
+        schema_extra = {
+            "example": {
+                "url": "https://shopify.supply/products/get-ship-done-hat-2-1",
+                "style": "modern"
+            }
+        }
+
 class VideoStatus(BaseModel):
     """Model representing video generation status."""
     status: str = Field(..., description="Video generation status", example="processing")
     progress: Optional[int] = Field(None, description="Generation progress percentage", example=50)
     estimated_time: Optional[str] = Field(None, description="Estimated time remaining", example="2 minutes")
 
-@router.post("/analyze-url", response_model=APIResponse, tags=["scraper"])
+    class Config:
+        schema_extra = {
+            "example": {
+                "status": "processing",
+                "progress": 50,
+                "estimated_time": "2 minutes"
+            }
+        }
+
+class VideoStatusResponse(APIResponse):
+    """Response model for video status."""
+    data: Optional[VideoStatus] = Field(None, description="Video generation status")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "status": "success",
+                "message": "Video status retrieved successfully",
+                "data": {
+                    "status": "processing",
+                    "progress": 50,
+                    "estimated_time": "2 minutes"
+                }
+            }
+        }
+
+@router.post("/analyze-url", response_model=ProductResponse, tags=["scraper"])
 async def analyze_url(input_data: URLInput):
     """
     Analyze a product URL and extract relevant information.
@@ -87,10 +193,10 @@ async def analyze_url(input_data: URLInput):
         # Validate the extracted data
         validated_data = ProductData(**product_data)
         
-        return APIResponse(
+        return ProductResponse(
             status="success",
             message="Product information extracted successfully",
-            data=validated_data.dict()
+            data=validated_data
         )
     except HTTPException as he:
         raise he
@@ -123,7 +229,7 @@ async def generate_video(request: VideoGenerationRequest):
             detail=f"Failed to generate video: {str(e)}"
         )
 
-@router.get("/video-status/{job_id}", response_model=APIResponse, tags=["scraper"])
+@router.get("/video-status/{job_id}", response_model=VideoStatusResponse, tags=["scraper"])
 async def get_video_status(job_id: str):
     """
     Check the status of a video generation job.
@@ -139,10 +245,10 @@ async def get_video_status(job_id: str):
             estimated_time="2 minutes"
         )
         
-        return APIResponse(
+        return VideoStatusResponse(
             status="success",
             message="Video status retrieved successfully",
-            data=status_data.dict()
+            data=status_data
         )
     except Exception as e:
         logger.error(f"Error checking video status: {str(e)}")
@@ -151,7 +257,7 @@ async def get_video_status(job_id: str):
             detail=f"Failed to check video status: {str(e)}"
         )
 
-@router.get("/test-scrape/{url:path}", tags=["scraper"])
+@router.get("/test-scrape/{url:path}", response_model=ProductResponse, tags=["scraper"])
 async def test_scrape(url: str):
     """
     Test endpoint to see raw scraped values.
@@ -176,10 +282,14 @@ async def test_scrape(url: str):
         # Extract product information
         product_data = await scraper.extract_product_info(url)
         
-        return {
-            "raw_data": product_data,
-            "validated_data": ProductData(**product_data).dict()
-        }
+        # Validate the extracted data
+        validated_data = ProductData(**product_data)
+        
+        return ProductResponse(
+            status="success",
+            message="Product information extracted successfully",
+            data=validated_data
+        )
     except Exception as e:
         logger.error(f"Error in test scrape: {str(e)}")
         raise HTTPException(

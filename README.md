@@ -1,25 +1,130 @@
 # Video Ads Generator Backend
 
-A FastAPI-based backend for the Video Ads Generator application that processes product URLs and generates video advertisements.
+## Architecture Overview
 
-## Features
+### Tech Stack
 
-- URL analysis and content extraction
-- Video generation pipeline
-- OpenAI integration for content enhancement
-- Asynchronous job processing
+- FastAPI: Modern, fast web framework for building APIs
+- BeautifulSoup4: Web scraping
+- OpenAI API: Content generation
+- MoviePy: Video generation
+- SQLAlchemy: Database ORM
+- Pydantic: Data validation
+- Celery: Background task processing
 
-## Tech Stack
+### Project Structure
 
-- FastAPI
-- Python 3.8+
-- OpenAI API
-- BeautifulSoup4 for web scraping
-- Uvicorn for ASGI server
+```
+backend/
+├── app/
+│   ├── api/
+│   │   ├── routes/
+│   │   │   ├── product.py
+│   │   │   ├── video.py
+│   │   │   └── ai.py
+│   │   ├── core/
+│   │   │   ├── config.py
+│   │   │   └── security.py
+│   │   ├── services/
+│   │   │   ├── scraper/
+│   │   │   │   ├── base.py
+│   │   │   │   ├── shopify.py
+│   │   │   │   └── amazon.py
+│   │   │   ├── ai/
+│   │   │   │   ├── openai_service.py
+│   │   │   │   └── content_generator.py
+│   │   │   └── video/
+│   │   │       ├── video_generator.py
+│   │   │       └── templates/
+│   │   ├── models/
+│   │   │   ├── product.py
+│   │   │   └── video.py
+│   │   └── schemas/
+│   │       ├── product.py
+│   │       └── video.py
+│   ├── tests/
+│   └── requirements.txt
+```
 
-## Setup Instructions
+## Implementation Plan
 
-1. Create a virtual environment:
+### Phase 1: URL Scraping & Data Extraction
+
+1. Implement base scraper interface
+2. Create platform-specific scrapers (Shopify, Amazon)
+3. Implement data validation and storage
+4. Add error handling and rate limiting
+
+### Phase 2: AI Content Generation
+
+1. Set up OpenAI integration
+2. Implement content generation service
+3. Create script variations
+4. Add content optimization
+
+### Phase 3: Video Generation
+
+1. Set up video generation service
+2. Implement template system
+3. Add text overlay and animations
+4. Support multiple aspect ratios
+
+## API Endpoints
+
+### Product Scraping
+
+- `POST /api/v1/products/scrape`
+  - Input: URL
+  - Output: Product details (images, description, features)
+
+### Content Generation
+
+- `POST /api/v1/content/generate`
+  - Input: Product details
+  - Output: Generated ad copy and scripts
+
+### Video Generation
+
+- `POST /api/v1/videos/generate`
+  - Input: Content and product details
+  - Output: Video URL
+
+## Best Practices
+
+### API Design
+
+- RESTful endpoints
+- Version control (v1)
+- Proper error handling
+- Rate limiting
+- Input validation
+- Documentation (OpenAPI/Swagger)
+
+### Security
+
+- API key authentication
+- CORS configuration
+- Input sanitization
+- Rate limiting
+- Secure file handling
+
+### Performance
+
+- Async operations
+- Background task processing
+- Caching
+- Resource optimization
+
+### Scalability
+
+- Modular design
+- Service separation
+- Background task processing
+- Database optimization
+
+## Getting Started
+
+1. Set up virtual environment:
 
 ```bash
 python -m venv venv
@@ -32,48 +137,24 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file in the backend directory with the following variables:
+3. Set up environment variables:
 
-```
-OPENAI_API_KEY=your_openai_api_key
+```bash
+cp .env.example .env
+# Edit .env with your configuration
 ```
 
-4. Start the development server:
+4. Run the development server:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-5. The API will be available at [http://localhost:8000](http://localhost:8000)
+## Development Guidelines
 
-## API Documentation
-
-Once the server is running, you can access:
-
-- Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs)
-- ReDoc: [http://localhost:8000/redoc](http://localhost:8000/redoc)
-
-## API Endpoints
-
-- POST `/api/analyze-url` - Analyze product URL
-- POST `/api/generate-video` - Generate video from analyzed content
-- GET `/api/video-status/{job_id}` - Check video generation status
-
-## Project Structure
-
-```
-backend/
-├── app/
-│   ├── api/          # API routes and endpoints
-│   ├── core/         # Core configuration
-│   ├── services/     # Business logic and services
-│   └── main.py       # FastAPI application
-├── requirements.txt  # Python dependencies
-└── README.md        # This file
-```
-
-## Development
-
-- Use `uvicorn app.main:app --reload` for development
-- Use `uvicorn app.main:app` for production
-- Use `pytest` for running tests (when implemented)
+1. Follow PEP 8 style guide
+2. Write unit tests for new features
+3. Document API endpoints
+4. Use type hints
+5. Implement proper error handling
+6. Follow Git flow branching strategy
