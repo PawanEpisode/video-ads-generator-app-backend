@@ -76,7 +76,7 @@ The backend is built with FastAPI and handles video generation from product imag
 1. **Start the Development Server**
 
    ```bash
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ./venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
 2. **Verify Installation**
