@@ -63,21 +63,7 @@ The backend is built with FastAPI and handles video generation from product imag
    # Create .env file
    touch .env
 
-   # Add the following variables to .env
-   PROJECT_NAME="Video Ads Generator"
-   VERSION="1.0.0"
-   OPENAI_API_KEY=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
-   DATABASE_URL="sqlite:///./video_ads.db"
-   REDIS_URL="redis://localhost:6379/0"
-   SECRET_KEY=your_secret_key_here
-   ACCESS_TOKEN_EXPIRE_MINUTES=30
-   SCRAPING_TIMEOUT=30
-   MAX_RETRIES=3
-   USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-   VIDEO_OUTPUT_DIR="output"
-   MAX_VIDEO_DURATION=30
-   TEMP_DIR=./temp
-   OUTPUT_DIR=./output
+   copy the env variables from .env.example file
    ```
 
 5. **Create Required Directories**
