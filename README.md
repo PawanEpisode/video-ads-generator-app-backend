@@ -1,160 +1,313 @@
-# Video Ads Generator Backend
+# Backend Documentation
 
-## Architecture Overview
+## Overview
 
-### Tech Stack
+The backend is built with FastAPI and handles video generation from product images and descriptions. It uses OpenCV for image processing and FFmpeg for video encoding.
 
-- FastAPI: Modern, fast web framework for building APIs
-- BeautifulSoup4: Web scraping
-- OpenAI API: Content generation
-- MoviePy: Video generation
-- SQLAlchemy: Database ORM
-- Pydantic: Data validation
-- Celery: Background task processing
+## Setup Instructions
 
-### Project Structure
+### Prerequisites
 
+1. **System Requirements**
+
+   - Python 3.8 or higher
+   - FFmpeg installed on your system
+   - Git
+   - Virtual environment tool (venv or conda)
+
+2. **Install FFmpeg**
+   - **macOS**:
+     ```bash
+     brew install ffmpeg
+     ```
+   - **Ubuntu/Debian**:
+     ```bash
+     sudo apt update
+     sudo apt install ffmpeg
+     ```
+   - **Windows**:
+     - Download from [FFmpeg official website](https://ffmpeg.org/download.html)
+     - Add to system PATH
+
+### Installation Steps
+
+1. **Clone the Repository**
+
+   ```bash
+   git clone https://github.com/PawanEpisode/video-ads-generator-app-backend.git
+   cd video-ads-generator-app/backend
+   ```
+
+2. **Create and Activate Virtual Environment**
+
+   ```bash
+   # Using venv
+   python -m venv venv
+
+   # Activate virtual environment
+   # On macOS/Linux:
+   source venv/bin/activate
+   # On Windows:
+   .\venv\Scripts\activate
+   ```
+
+3. **Install Dependencies**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Set Up Environment Variables**
+
+   ```bash
+   # Create .env file
+   touch .env
+
+   # Add the following variables to .env
+   PROJECT_NAME="Video Ads Generator"
+   VERSION="1.0.0"
+   OPENAI_API_KEY=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
+   DATABASE_URL="sqlite:///./video_ads.db"
+   REDIS_URL="redis://localhost:6379/0"
+   SECRET_KEY=your_secret_key_here
+   ACCESS_TOKEN_EXPIRE_MINUTES=30
+   SCRAPING_TIMEOUT=30
+   MAX_RETRIES=3
+   USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+   VIDEO_OUTPUT_DIR="output"
+   MAX_VIDEO_DURATION=30
+   TEMP_DIR=./temp
+   OUTPUT_DIR=./output
+   ```
+
+5. **Create Required Directories**
+   ```bash
+   mkdir temp output
+   ```
+
+### Running the Application
+
+1. **Start the Development Server**
+
+   ```bash
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+2. **Verify Installation**
+   - Open your browser and navigate to `http://localhost:8000/docs`
+   - You should see the Swagger UI documentation
+   - Test the health check endpoint at `http://localhost:8000/health`
+
+### Common Issues and Solutions
+
+1. **FFmpeg Not Found**
+
+   - Verify FFmpeg installation:
+     ```bash
+     ffmpeg -version
+     ```
+   - If not found, ensure FFmpeg is in your system PATH
+
+2. **Port Already in Use**
+
+   - Change the port number:
+     ```bash
+     uvicorn app.main:app --reload --port 8001
+     ```
+
+3. **Permission Issues**
+
+   - Ensure proper permissions for temp and output directories:
+     ```bash
+     chmod 755 temp output
+     ```
+
+4. **Virtual Environment Issues**
+   - If you get "command not found" errors, ensure the virtual environment is activated
+   - You should see `(venv)` at the start of your command prompt
+
+### Development Workflow
+
+1. **Code Changes**
+
+   - The server will automatically reload when you make changes
+   - Check the console for any error messages
+
+2. **Testing**
+
+   ```bash
+   # Run tests
+   pytest
+
+   # Run tests with coverage
+   pytest --cov=app
+   ```
+
+3. **API Documentation**
+   - Swagger UI: `http://localhost:8000/docs`
+   - ReDoc: `http://localhost:8000/redoc`
+
+## Architecture
+
+### Core Components
+
+1. **VideoGenerator Service**
+
+   - Handles video generation from images and text
+   - Manages temporary files and cleanup
+   - Provides text overlay with proper formatting
+
+2. **API Endpoints**
+   - `/process`: Main endpoint for video generation
+   - `/videos`: Serves generated videos
+   - `/health`: Health check endpoint
+
+### Key Features
+
+1. **Image Processing**
+
+   - Downloads and validates images
+   - Handles various image formats
+   - Maintains aspect ratio during resizing
+   - Supports both local and remote image URLs
+
+2. **Text Overlay**
+
+   - Dynamic text wrapping
+   - Centered text positioning
+   - Semi-transparent background
+   - Proper line spacing and padding
+
+3. **Video Generation**
+   - Configurable FPS and duration
+   - H.264 encoding for web compatibility
+   - Proper aspect ratio maintenance
+   - Fallback mechanisms for errors
+
+## Technical Details
+
+### VideoGenerator Class
+
+```python
+class VideoGenerator:
+    def __init__(self):
+        # Video settings
+        self.fps = 24
+        self.duration_per_image = 5
+        self.text_scale = 0.8
+        self.text_thickness = 1
+        self.text_padding = 20
 ```
-backend/
-├── app/
-│   ├── api/
-│   │   ├── routes/
-│   │   │   ├── product.py
-│   │   │   ├── video.py
-│   │   │   └── ai.py
-│   │   ├── core/
-│   │   │   ├── config.py
-│   │   │   └── security.py
-│   │   ├── services/
-│   │   │   ├── scraper/
-│   │   │   │   ├── base.py
-│   │   │   │   ├── shopify.py
-│   │   │   │   └── amazon.py
-│   │   │   ├── ai/
-│   │   │   │   ├── openai_service.py
-│   │   │   │   └── content_generator.py
-│   │   │   └── video/
-│   │   │       ├── video_generator.py
-│   │   │       └── templates/
-│   │   ├── models/
-│   │   │   ├── product.py
-│   │   │   └── video.py
-│   │   └── schemas/
-│   │       ├── product.py
-│   │       └── video.py
-│   ├── tests/
-│   └── requirements.txt
-```
 
-## Implementation Plan
+### Key Methods
 
-### Phase 1: URL Scraping & Data Extraction
+1. **download_media**
 
-1. Implement base scraper interface
-2. Create platform-specific scrapers (Shopify, Amazon)
-3. Implement data validation and storage
-4. Add error handling and rate limiting
+   - Downloads images from URLs
+   - Handles CORS and network issues
+   - Validates downloaded content
+   - Creates fallback black screen if needed
 
-### Phase 2: AI Content Generation
+2. **generate_video**
 
-1. Set up OpenAI integration
-2. Implement content generation service
-3. Create script variations
-4. Add content optimization
+   - Creates video from images and text
+   - Manages scene transitions
+   - Handles video encoding
+   - Provides progress updates
 
-### Phase 3: Video Generation
+3. **\_create_text_overlay**
+   - Implements text wrapping
+   - Centers text in background
+   - Positions overlay at bottom
+   - Handles multi-line text
 
-1. Set up video generation service
-2. Implement template system
-3. Add text overlay and animations
-4. Support multiple aspect ratios
+## Setup and Configuration
 
-## API Endpoints
+1. **Dependencies**
 
-### Product Scraping
+   ```
+   fastapi
+   opencv-python
+   numpy
+   aiohttp
+   python-multipart
+   ```
 
-- `POST /api/v1/products/scrape`
-  - Input: URL
-  - Output: Product details (images, description, features)
+2. **Environment Variables**
 
-### Content Generation
+   - `TEMP_DIR`: Directory for temporary files
+   - `OUTPUT_DIR`: Directory for generated videos
 
-- `POST /api/v1/content/generate`
-  - Input: Product details
-  - Output: Generated ad copy and scripts
+3. **FFmpeg Requirements**
+   - Must be installed on the system
+   - Used for video encoding
+   - Supports H.264 codec
 
-### Video Generation
+## Error Handling
 
-- `POST /api/v1/videos/generate`
-  - Input: Content and product details
-  - Output: Video URL
+1. **Image Processing**
 
-## Best Practices
+   - Validates image downloads
+   - Handles corrupt images
+   - Provides fallback mechanisms
 
-### API Design
+2. **Video Generation**
 
-- RESTful endpoints
-- Version control (v1)
-- Proper error handling
-- Rate limiting
-- Input validation
-- Documentation (OpenAPI/Swagger)
+   - Validates input parameters
+   - Handles encoding errors
+   - Cleans up temporary files
 
-### Security
+3. **Text Overlay**
+   - Handles text overflow
+   - Manages font rendering
+   - Provides fallback for missing fonts
 
-- API key authentication
-- CORS configuration
-- Input sanitization
-- Rate limiting
-- Secure file handling
+## Performance Considerations
 
-### Performance
+1. **Memory Management**
 
-- Async operations
-- Background task processing
-- Caching
-- Resource optimization
+   - Cleans up temporary files
+   - Manages image buffers
+   - Handles large video files
 
-### Scalability
+2. **Async Operations**
+   - Uses aiohttp for downloads
+   - Implements proper async/await
+   - Handles concurrent requests
 
-- Modular design
-- Service separation
-- Background task processing
-- Database optimization
+## Security
 
-## Getting Started
+1. **File Handling**
 
-1. Set up virtual environment:
+   - Validates file types
+   - Sanitizes file paths
+   - Implements proper cleanup
 
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+2. **API Security**
+   - Input validation
+   - Error message sanitization
+   - Proper CORS handling
 
-2. Install dependencies:
+## Testing
 
-```bash
-pip install -r requirements.txt
-```
+1. **Unit Tests**
 
-3. Set up environment variables:
+   - Image processing
+   - Text overlay
+   - Video generation
 
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
+2. **Integration Tests**
+   - API endpoints
+   - File handling
+   - Error scenarios
 
-4. Run the development server:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-## Development Guidelines
+## Contributing
 
 1. Follow PEP 8 style guide
-2. Write unit tests for new features
-3. Document API endpoints
-4. Use type hints
-5. Implement proper error handling
-6. Follow Git flow branching strategy
+2. Add proper error handling
+3. Include docstrings
+4. Update tests
+
+## License
+
+MIT License

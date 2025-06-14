@@ -9,7 +9,8 @@ requests==2.31.0
 beautifulsoup4==4.12.2
 aiohttp==3.9.1
 lxml==4.9.3
-moviepy==1.0.3
+opencv-python==4.9.0.80
+pillow==10.2.0
 celery==5.3.6
 redis==5.0.1
 sqlalchemy==2.0.23

@@ -1,7 +1,8 @@
 from typing import Dict, List, Optional
 import os
-from moviepy.editor import VideoFileClip, ImageClip, TextClip, CompositeVideoClip, AudioFileClip, ColorClip
-from app.core.config import settings
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 import uuid
 import aiohttp
 import asyncio
@@ -9,37 +10,49 @@ from pathlib import Path
 import logging
 import tempfile
 import shutil
-from moviepy.editor import concatenate_videoclips
-from moviepy.config import change_settings
-from app.core.moviepy_config import configure_moviepy
-from PIL import Image
+import textwrap
+import subprocess
 
 logger = logging.getLogger(__name__)
 
 class VideoGenerator:
-    def __init__(self, logger=None):
-        """Initialize the VideoGenerator."""
-        self.logger = logger or logging.getLogger(__name__)
+    """Service for generating videos from product data."""
+    
+    def __init__(self):
+        """Initialize the video generator."""
+        self.logger = logging.getLogger(__name__)
+        
+        # Create temporary directory
+        self.temp_dir = os.path.join(os.getcwd(), "temp")
+        os.makedirs(self.temp_dir, exist_ok=True)
+        
+        # Create output directory
+        self.output_dir = os.path.join(os.getcwd(), "output")
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Video settings
+        self.fps = 24  # Frames per second
+        self.duration_per_image = 5  # Duration in seconds for each image
+        self.text_color = (255, 255, 255)  # White color for text
+        self.text_scale = 0.8  # Reduced text scale
+        self.text_thickness = 1  # Reduced thickness
+        self.text_padding = 20  # Reduced padding
+        
+        # Font settings
+        self.font = cv2.FONT_HERSHEY_SIMPLEX
+        self.font_scale = 0.8  # Reduced font scale
+        self.font_thickness = 1  # Reduced font thickness
+        
+        self.logger.info("VideoGenerator initialized")
         
         # Set up directories
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.temp_dir = os.path.join(self.base_dir, 'temp')
-        self.output_dir = os.path.join(self.base_dir, 'output')
-        
-        # Create directories if they don't exist
-        for directory in [self.temp_dir, self.output_dir]:
-            if not os.path.exists(directory):
-                os.makedirs(directory, exist_ok=True)
-                self.logger.info(f"Created directory: {directory}")
-            else:
-                self.logger.info(f"Using existing directory: {directory}")
         
         # Clean up any existing files in temp directory
         self._cleanup_temp_files()
         
         # Check for ffmpeg
         try:
-            import subprocess
             result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
             if result.returncode != 0:
                 raise Exception("ffmpeg command failed")
@@ -51,12 +64,6 @@ class VideoGenerator:
             self.logger.error("  - On Ubuntu/Debian: sudo apt-get install ffmpeg")
             self.logger.error("  - On Windows: Download from https://ffmpeg.org/download.html")
             raise Exception("ffmpeg is required but not installed. Please install ffmpeg to generate videos.")
-        
-        # Configure MoviePy settings
-        configure_moviepy()
-        
-        # Set fallback text rendering method
-        self.use_simple_text = True  # Default to simple text rendering
 
     def _cleanup_temp_files(self):
         """Clean up temporary files from previous runs."""
@@ -72,171 +79,218 @@ class VideoGenerator:
                         self.logger.warning(f"Error cleaning up file {file}: {str(e)}")
         except Exception as e:
             self.logger.error(f"Error cleaning up temporary files: {str(e)}")
+
+    def _create_text_overlay(self, image: np.ndarray, text: str) -> np.ndarray:
+        """Create text overlay on image with text wrapping."""
+        try:
+            # Create a copy of the image
+            result = image.copy()
             
-    def cleanup(self):
-        """Clean up resources after video generation."""
-        try:
-            self._cleanup_temp_files()
-            self.logger.info("Cleanup completed successfully")
-        except Exception as e:
-            self.logger.error(f"Error during cleanup: {str(e)}")
-
-    async def download_media(self, product_data: Dict) -> Dict[str, List[str]]:
-        """Download all media files (images and videos) from product data."""
-        try:
-            self.logger.info("Starting media download")
-            media_files = {
-                "images": [],
-                "videos": []
-            }
-
-            # Download images
-            if product_data.get("images"):
-                self.logger.info(f"Downloading {len(product_data['images'])} images")
-                image_paths = await self._download_files(product_data["images"], "images")
-                media_files["images"] = image_paths
-
-            # Download videos
-            if product_data.get("videos"):
-                self.logger.info(f"Downloading {len(product_data['videos'])} videos")
-                video_paths = await self._download_files(
-                    [v["url"] for v in product_data["videos"] if isinstance(v, dict) and "url" in v],
-                    "videos"
+            # Get image dimensions
+            height, width = image.shape[:2]
+            
+            # Wrap text to fit width
+            max_width = width - (2 * self.text_padding)  # Leave padding on both sides
+            words = text.split()
+            lines = []
+            current_line = []
+            
+            for word in words:
+                # Test if adding this word exceeds max width
+                test_line = ' '.join(current_line + [word])
+                (text_width, _), _ = cv2.getTextSize(
+                    test_line, self.font, self.font_scale, self.font_thickness
                 )
-                media_files["videos"] = video_paths
-
-            self.logger.info(f"Media download completed: {media_files}")
-            return media_files
-        except Exception as e:
-            self.logger.error(f"Error downloading media: {str(e)}")
-            raise Exception(f"Error downloading media: {str(e)}")
-
-    async def _download_files(self, urls: List[str], media_type: str) -> List[str]:
-        """Download files from URLs and save them to the temp directory."""
-        try:
-            media_dir = self.temp_dir / media_type
-            media_dir.mkdir(exist_ok=True)
+                
+                if text_width <= max_width:
+                    current_line.append(word)
+                else:
+                    if current_line:
+                        lines.append(' '.join(current_line))
+                    current_line = [word]
             
-            downloaded_files = []
-            async with aiohttp.ClientSession() as session:
-                for i, url in enumerate(urls):
-                    try:
-                        if not url:
-                            continue
-                            
-                        # Create a unique filename
-                        ext = os.path.splitext(url)[1] or ('.mp4' if media_type == 'videos' else '.jpg')
-                        filename = f"{media_type}_{i}{ext}"
-                        filepath = media_dir / filename
-                        
-                        # Download the file
-                        async with session.get(url) as response:
-                            if response.status == 200:
-                                content = await response.read()
-                                with open(filepath, 'wb') as f:
-                                    f.write(content)
-                                downloaded_files.append(str(filepath))
-                                self.logger.info(f"Downloaded {media_type} file: {filename}")
-                    except Exception as e:
-                        self.logger.error(f"Error downloading {media_type} file {url}: {str(e)}")
-                        continue
+            if current_line:
+                lines.append(' '.join(current_line))
             
-            return downloaded_files
+            # Calculate total text height and line height
+            line_height = int(self.font_scale * 30)  # Approximate line height
+            total_text_height = len(lines) * line_height
+            
+            # Calculate background rectangle dimensions
+            max_line_width = 0
+            for line in lines:
+                (line_width, _), _ = cv2.getTextSize(
+                    line, self.font, self.font_scale, self.font_thickness
+                )
+                max_line_width = max(max_line_width, line_width)
+            
+            # Calculate background position (centered horizontally, at bottom)
+            bg_width = max_line_width + (2 * self.text_padding)
+            bg_height = total_text_height + (2 * self.text_padding)
+            bg_x1 = (width - bg_width) // 2
+            bg_y1 = height - bg_height - self.text_padding  # Position at bottom with padding
+            bg_x2 = bg_x1 + bg_width
+            bg_y2 = bg_y1 + bg_height
+            
+            # Create semi-transparent background for text
+            overlay = result.copy()
+            
+            # Draw background
+            cv2.rectangle(
+                overlay,
+                (bg_x1, bg_y1),
+                (bg_x2, bg_y2),
+                (0, 0, 0),
+                -1
+            )
+            
+            # Calculate starting y position for text (centered in background)
+            text_start_y = bg_y1 + self.text_padding + line_height
+            
+            # Add text lines
+            for i, line in enumerate(lines):
+                (line_width, _), _ = cv2.getTextSize(
+                    line, self.font, self.font_scale, self.font_thickness
+                )
+                text_x = (width - line_width) // 2
+                current_y = text_start_y + (i * line_height)
+                
+                cv2.putText(
+                    overlay,
+                    line,
+                    (text_x, current_y),
+                    self.font,
+                    self.font_scale,
+                    self.text_color,
+                    self.font_thickness,
+                    cv2.LINE_AA
+                )
+            
+            # Blend overlay with original image
+            alpha = 0.7  # Transparency factor
+            cv2.addWeighted(overlay, alpha, result, 1 - alpha, 0, result)
+            
+            return result
+            
         except Exception as e:
-            self.logger.error(f"Error in _download_files: {str(e)}")
-            return []
+            self.logger.error(f"Error creating text overlay: {str(e)}")
+            return image
 
-    def _create_text_clip(self, text: str, duration: float = 5.0) -> TextClip:
-        """Create a text clip with fallback options."""
+    def _resize_image(self, image: np.ndarray, target_size: tuple = (1920, 1080)) -> np.ndarray:
+        """Resize image while maintaining aspect ratio."""
         try:
-            if not self.use_simple_text:
-                # Try with ImageMagick first
-                return TextClip(
-                    text,
-                    fontsize=70,
-                    color='white',
-                    font='Arial-Bold',
-                    size=(1920, 200),
-                    method='caption'
-                ).set_duration(duration)
+            h, w = image.shape[:2]
+            target_w, target_h = target_size
+            
+            # Calculate aspect ratios
+            aspect_ratio = w / h
+            target_ratio = target_w / target_h
+            
+            if aspect_ratio > target_ratio:
+                # Image is wider than target
+                new_w = target_w
+                new_h = int(target_w / aspect_ratio)
+            else:
+                # Image is taller than target
+                new_h = target_h
+                new_w = int(target_h * aspect_ratio)
+            
+            # Resize image
+            resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+            
+            # Create black background
+            background = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+            
+            # Calculate position to center the image
+            x = (target_w - new_w) // 2
+            y = (target_h - new_h) // 2
+            
+            # Place resized image on background
+            background[y:y+new_h, x:x+new_w] = resized
+            
+            return background
+            
         except Exception as e:
-            self.logger.warning(f"Failed to create text clip with ImageMagick: {str(e)}")
-            self.use_simple_text = True  # Switch to simple text rendering
-        
-        # Use simple text rendering
-        return TextClip(
-            text,
-            fontsize=70,
-            color='white',
-            size=(1920, 200),
-            method='label'  # Use simpler label method
-        ).set_duration(duration)
+            self.logger.error(f"Error resizing image: {str(e)}")
+            return image
 
     async def _generate_basic_video(self, media_files: Dict[str, List[str]], output_path: str) -> str:
         """Generate a basic video using only images."""
         try:
             self.logger.info("Starting basic video generation")
-            self.logger.info(f"Media files: {media_files}")
             
             if not media_files['images']:
                 self.logger.error("No images available for basic video generation")
                 raise ValueError("No images available for basic video generation")
             
-            self.logger.info(f"Creating basic video with {len(media_files['images'])} images")
+            # Video settings
+            fps = 24
+            frame_duration = 5  # seconds per image
+            frame_size = (1920, 1080)
             
-            # Create clips for each image
-            clips = []
-            for i, image_path in enumerate(media_files['images']):
+            # Create video writer with H.264 codec
+            temp_output = output_path.replace('.mp4', '_temp.mp4')
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')  # Use H.264 codec
+            out = cv2.VideoWriter(temp_output, fourcc, fps, frame_size)
+            
+            if not out.isOpened():
+                raise Exception("Failed to create video writer")
+            
+            # Process each image
+            for image_path in media_files['images']:
                 try:
-                    if not os.path.exists(image_path):
-                        self.logger.warning(f"Image {i} not found at {image_path}, skipping")
+                    # Read image
+                    image = cv2.imread(image_path)
+                    if image is None:
+                        self.logger.warning(f"Failed to read image: {image_path}")
                         continue
-                        
-                    self.logger.info(f"Creating clip for image {i}: {image_path}")
                     
-                    # Load and resize image
-                    img = Image.open(image_path)
-                    # Resize to 1920x1080 while maintaining aspect ratio
-                    img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
-                    # Create a black background
-                    background = Image.new('RGB', (1920, 1080), (0, 0, 0))
-                    # Calculate position to center the image
-                    x = (1920 - img.width) // 2
-                    y = (1080 - img.height) // 2
-                    # Paste the image onto the background
-                    background.paste(img, (x, y))
-                    # Save the processed image
-                    processed_path = os.path.join(self.temp_dir, f"processed_image_{i}.jpg")
-                    background.save(processed_path)
+                    # Resize image
+                    image = self._resize_image(image, frame_size)
                     
-                    # Create clip from processed image
-                    clip = ImageClip(processed_path).set_duration(5)  # 5 seconds per image
-                    clips.append(clip)
-                    self.logger.info(f"Successfully created clip for image {i}")
+                    # Write frames
+                    for _ in range(fps * frame_duration):
+                        out.write(image)
+                    
+                    self.logger.info(f"Processed image: {image_path}")
+                    
                 except Exception as e:
-                    self.logger.error(f"Error creating clip for image {i}: {str(e)}")
+                    self.logger.error(f"Error processing image {image_path}: {str(e)}")
                     continue
             
-            if not clips:
-                self.logger.error("No valid clips were created")
-                raise ValueError("No valid clips were created")
+            # Release video writer
+            out.release()
             
-            # Concatenate clips
-            self.logger.info("Concatenating clips")
-            final_clip = concatenate_videoclips(clips)
+            # Verify the temp file exists and has content
+            if not os.path.exists(temp_output) or os.path.getsize(temp_output) == 0:
+                raise Exception("Failed to create temporary video file")
             
-            # Write the video
-            self.logger.info(f"Writing video to {output_path}")
-            final_clip.write_videofile(
-                output_path,
-                fps=24,
-                codec='libx264',
-                audio_codec='aac',
-                temp_audiofile=os.path.join(self.temp_dir, 'temp-audio.m4a'),
-                remove_temp=True,
-                threads=4,
-                preset='ultrafast'  # Faster encoding
-            )
+            # Convert to final MP4 using ffmpeg
+            try:
+                ffmpeg_cmd = [
+                    'ffmpeg',
+                    '-y',  # Overwrite output file if it exists
+                    '-i', temp_output,
+                    '-c:v', 'libx264',
+                    '-preset', 'medium',
+                    '-crf', '23',
+                    '-movflags', '+faststart',  # Enable fast start for web playback
+                    output_path
+                ]
+                
+                result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    self.logger.error(f"FFmpeg error: {result.stderr}")
+                    raise Exception(f"FFmpeg conversion failed: {result.stderr}")
+                
+                # Verify the output file exists and has content
+                if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                    raise Exception("Failed to create final video file")
+                
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
             
             self.logger.info("Basic video generation completed successfully")
             return output_path
@@ -244,187 +298,133 @@ class VideoGenerator:
         except Exception as e:
             self.logger.error(f"Error in basic video generation: {str(e)}")
             raise Exception(f"Error generating basic video: {str(e)}")
-        finally:
-            # Clean up clips
-            for clip in clips:
-                try:
-                    clip.close()
-                except:
-                    pass
 
     async def generate_video(self, script: Dict, product_data: Dict) -> str:
         """Generate a video from the script and product data."""
         try:
             self.logger.info("Starting video generation")
-            self.logger.info(f"Script: {script}")
-            self.logger.info(f"Product data: {product_data}")
             
-            # Generate output path first
+            # Download media files
+            media_files = await self.download_media(product_data)
+            
+            if not media_files['images']:
+                raise Exception("No images available for video generation")
+            
+            # Parse the script
+            scenes = self._parse_script(script["content"])
+            if not scenes:
+                raise ValueError("No scenes found in script")
+            
+            # Create video
             output_path = os.path.join(self.output_dir, f"video_{uuid.uuid4()}.mp4")
-            self.logger.info(f"Output path: {output_path}")
+            temp_output = os.path.join(self.temp_dir, "temp_output.mp4")
             
-            media_files = await self._download_media(product_data)
-            if not media_files or not media_files.get('images'):
-                raise ValueError("No media files downloaded")
-            
-            self.logger.info(f"Downloaded media files: {media_files}")
-            
-            try:
-                # Try to generate the full video first
-                # Parse the script
-                scenes = self._parse_script(script["content"])
-                if not scenes:
-                    raise ValueError("No scenes found in script")
+            # Get dimensions from first image
+            first_image = cv2.imread(media_files['images'][0])
+            if first_image is None:
+                raise Exception("Failed to read first image")
                 
-                self.logger.info(f"Parsed scenes: {scenes}")
-                
-                # Create clips for each scene
-                clips = []
-                for i, scene in enumerate(scenes):
-                    try:
-                        self.logger.info(f"Creating clip for scene {i}: {scene}")
-                        
-                        # Create base clip (image or color)
-                        try:
-                            images = media_files.get('images', [])
-                            if not images:
-                                self.logger.warning(f"No images available, using color clip for scene {i}")
-                                base_clip = ColorClip(size=(1920, 1080), color=(0, 0, 0))
-                            else:
-                                image_path = images[i % len(images)]
-                                if not image_path or not os.path.exists(image_path):
-                                    self.logger.warning(f"Invalid image path for scene {i}, using color clip")
-                                    base_clip = ColorClip(size=(1920, 1080), color=(0, 0, 0))
-                                else:
-                                    self.logger.info(f"Using image {image_path} for scene {i}")
-                                    base_clip = ImageClip(image_path)
-                            
-                            # Set duration for base clip
-                            base_clip = base_clip.set_duration(5)
-                            self.logger.info(f"Created base clip for scene {i}")
-                        except Exception as e:
-                            self.logger.error(f"Error creating base clip for scene {i}: {str(e)}")
-                            base_clip = ColorClip(size=(1920, 1080), color=(0, 0, 0)).set_duration(5)
-                        
-                        # Create text clip
-                        try:
-                            text_clip = self._create_text_clip(scene['description'])
-                            text_clip = text_clip.set_position(('center', 'bottom'))
-                            self.logger.info(f"Created text clip for scene {i}")
-                        except Exception as e:
-                            self.logger.error(f"Error creating text clip for scene {i}: {str(e)}")
-                            # Create a simple text clip as fallback
-                            text_clip = TextClip(
-                                scene['description'],
-                                fontsize=70,
-                                color='white',
-                                size=(1920, 200),
-                                method='label'
-                            ).set_duration(5).set_position(('center', 'bottom'))
-                        
-                        # Composite the clips
-                        try:
-                            final_clip = CompositeVideoClip([base_clip, text_clip])
-                            clips.append(final_clip)
-                            self.logger.info(f"Successfully created final clip for scene {i}")
-                        except Exception as e:
-                            self.logger.error(f"Error compositing clips for scene {i}: {str(e)}")
-                            # Try a simpler composition as fallback
-                            try:
-                                final_clip = CompositeVideoClip([
-                                    ColorClip(size=(1920, 1080), color=(0, 0, 0)).set_duration(5),
-                                    text_clip
-                                ])
-                                clips.append(final_clip)
-                                self.logger.info(f"Created fallback final clip for scene {i}")
-                            except Exception as fallback_error:
-                                self.logger.error(f"Error creating fallback final clip for scene {i}: {str(fallback_error)}")
-                                continue
-                        
-                    except Exception as e:
-                        self.logger.error(f"Error in scene {i} processing: {str(e)}")
+            height, width = first_image.shape[:2]
+            
+            # Create video writer
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')  # Use H.264 codec
+            video_writer = cv2.VideoWriter(temp_output, fourcc, self.fps, (width, height))
+            
+            if not video_writer.isOpened():
+                raise Exception("Failed to create video writer")
+            
+            # Process each scene
+            for scene in scenes:
+                try:
+                    # Get image for scene
+                    image_index = scene.get('timestamp', 0) % len(media_files['images'])
+                    image_path = media_files['images'][image_index]
+                    
+                    # Read image
+                    image = cv2.imread(image_path)
+                    if image is None:
+                        self.logger.warning(f"Failed to read image: {image_path}")
                         continue
+                        
+                    # Resize image if needed
+                    if image.shape[:2] != (height, width):
+                        image = cv2.resize(image, (width, height))
+                    
+                    # Add text overlay
+                    image = self._create_text_overlay(image, scene['description'])
+                    
+                    # Calculate number of frames for this scene
+                    num_frames = int(scene.get('duration', 5) * self.fps)
+                    
+                    # Write frames
+                    for _ in range(num_frames):
+                        video_writer.write(image)
+                        
+                    self.logger.info(f"Processed scene: {scene['description']}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error processing scene: {str(e)}")
+                    continue
+            
+            # Release video writer
+            video_writer.release()
+            
+            # Convert to MP4 with ffmpeg
+            try:
+                ffmpeg_cmd = [
+                    'ffmpeg', '-y',  # Overwrite output file if it exists
+                    '-i', temp_output,
+                    '-c:v', 'libx264',
+                    '-preset', 'medium',
+                    '-crf', '23',
+                    '-movflags', '+faststart',  # Enable fast start for web playback
+                    output_path
+                ]
                 
-                if not clips:
-                    raise ValueError("No valid clips were created")
-                
-                self.logger.info(f"Created {len(clips)} clips")
-                
-                # Concatenate all clips
-                final_video = concatenate_videoclips(clips)
-                
-                # Add background music if available
-                if media_files.get('audio') and os.path.exists(media_files['audio']):
-                    try:
-                        audio = AudioFileClip(media_files['audio'])
-                        # Loop audio if needed
-                        if audio.duration < final_video.duration:
-                            audio = audio.loop(duration=final_video.duration)
-                        final_video = final_video.set_audio(audio)
-                        self.logger.info("Successfully added audio")
-                    except Exception as e:
-                        self.logger.error(f"Error adding audio: {str(e)}")
-                
-                # Write the result
-                self.logger.info(f"Writing final video to {output_path}")
-                final_video.write_videofile(
-                    output_path,
-                    fps=24,
-                    codec='libx264',
-                    audio_codec='aac',
-                    temp_audiofile='temp-audio.m4a',
-                    remove_temp=True
+                process = await asyncio.create_subprocess_exec(
+                    *ffmpeg_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
                 
-                # Clean up
-                self.logger.info("Cleaning up temporary files")
-                for clip in clips:
-                    clip.close()
-                final_video.close()
+                stdout, stderr = await process.communicate()
                 
-                # Clean up downloaded media
-                await self._cleanup_media(media_files)
-                
-                self.logger.info("Video generation completed successfully")
-                return output_path
+                if process.returncode != 0:
+                    self.logger.error(f"FFmpeg error: {stderr.decode()}")
+                    raise Exception(f"FFmpeg conversion failed: {stderr.decode()}")
+                    
+                # Verify the output file
+                if not os.path.exists(output_path):
+                    raise Exception("FFmpeg conversion failed: Output file not created")
+                    
+                file_size = os.path.getsize(output_path)
+                if file_size == 0:
+                    raise Exception("FFmpeg conversion failed: Output file is empty")
+                    
+                self.logger.info(f"Video generated successfully. File size: {file_size} bytes")
                 
             except Exception as e:
-                self.logger.error(f"Error in full video generation: {str(e)}")
-                self.logger.info("Falling back to basic video generation")
-                
-                # Try basic video generation as fallback
-                try:
-                    basic_video_path = await self._generate_basic_video(media_files, output_path)
-                    self.logger.info("Successfully generated basic video")
-                    return basic_video_path
-                except Exception as basic_error:
-                    self.logger.error(f"Error in basic video generation: {str(basic_error)}")
-                    raise Exception(f"Both full and basic video generation failed: {str(e)} -> {str(basic_error)}")
-                    
+                self.logger.error(f"Error in ffmpeg conversion: {str(e)}")
+                raise Exception(f"Error converting video: {str(e)}")
+            
+            return output_path
+            
         except Exception as e:
-            self.logger.error(f"Error generating video: {str(e)}")
-            # Clean up any downloaded files
-            if 'media_files' in locals():
-                await self._cleanup_media(media_files)
+            self.logger.error(f"Error in video generation: {str(e)}")
             raise Exception(f"Error generating video: {str(e)}")
+        finally:
+            # Cleanup temporary files
+            try:
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
+            except Exception as e:
+                self.logger.warning(f"Error cleaning up temporary files: {str(e)}")
 
     def _parse_script(self, script: str) -> List[Dict]:
-        """Parse the script into scenes with timestamps."""
+        """Parse the script into scenes."""
         try:
-            self.logger.info("Starting script parsing")
             scenes = []
-            
-            # Split script into sections (header and scenes)
-            sections = script.split('---')
-            if len(sections) < 2:
-                raise Exception("Script must contain a header and scenes section separated by '---'")
-            
-            # Get the scenes section
-            scenes_section = sections[1].strip()
-            self.logger.info(f"Scenes section: {scenes_section}")
-            
-            # Split into lines and process each line
-            lines = [line.strip() for line in scenes_section.split('\n') if line.strip()]
+            lines = script.strip().split('\n')
             
             for line in lines:
                 if not line.startswith('[') or ']' not in line:
@@ -467,66 +467,18 @@ class VideoGenerator:
             
             if not scenes:
                 self.logger.error("No valid scenes found in script")
-                self.logger.debug(f"Script content: {script}")
                 raise Exception("No valid scenes found in script")
             
-            self.logger.info(f"Successfully parsed {len(scenes)} scenes: {scenes}")
             return scenes
             
         except Exception as e:
             self.logger.error(f"Error parsing script: {str(e)}")
             raise Exception(f"Error parsing script: {str(e)}")
 
-    async def _create_scene_clip(self, scene: Dict, media_files: Dict[str, List[str]]) -> Optional[VideoFileClip]:
-        """Create a video clip for a scene."""
-        try:
-            duration = scene.get('duration', 5)
-            self.logger.info(f"Creating scene clip: {scene['description']} with duration {duration}s")
-            
-            # Try to use an image for the scene
-            if media_files.get("images"):
-                # Use different images for different scenes
-                image_index = scene.get('timestamp', 0) % len(media_files["images"])
-                image_path = media_files["images"][image_index]
-                self.logger.info(f"Using image {image_index} for scene: {scene['description']}")
-                
-                # Create image clip
-                clip = ImageClip(image_path, duration=duration)
-                # Resize to 1920x1080 while maintaining aspect ratio
-                clip = clip.resize(width=1920)
-            else:
-                # Create a color background if no images are available
-                self.logger.warning("No images available, using color background")
-                clip = ColorClip(size=(1920, 1080), color=(0, 0, 0), duration=duration)
-            
-            # Add text overlay
-            text_clip = TextClip(
-                scene["description"],
-                fontsize=40,
-                color='white',
-                bg_color='rgba(0,0,0,0.5)',
-                size=(1920, None),
-                method='caption',
-                align='center'
-            ).set_duration(duration)
-            
-            # Position text in the center
-            text_clip = text_clip.set_position(('center', 'center'))
-            
-            # Combine video and text
-            final_clip = CompositeVideoClip([clip, text_clip])
-            self.logger.info(f"Created scene clip for: {scene['description']}")
-            return final_clip
-            
-        except Exception as e:
-            self.logger.error(f"Error creating scene clip: {str(e)}")
-            return None
-
-    async def _download_media(self, product_data: Dict) -> Dict[str, List[str]]:
+    async def download_media(self, product_data: Dict) -> Dict[str, List[str]]:
         """Download media files from product data."""
         try:
-            self.logger.info("Starting media download")
-            self.logger.info(f"Product data: {product_data}")
+            self.logger.warning("Starting media download", product_data)
             
             media_files = {
                 'images': [],
@@ -535,156 +487,92 @@ class VideoGenerator:
             
             # Download images
             if 'images' in product_data and product_data['images']:
-                self.logger.info(f"Found {len(product_data['images'])} images to download")
-                for i, image_url in enumerate(product_data['images']):
-                    try:
-                        if not image_url:
-                            self.logger.warning(f"Empty image URL at index {i}, skipping")
+                self.logger.warning(f"Found {len(product_data['images'])} images to download")
+                
+                # Headers to avoid CORS and mimic browser request
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Referer': 'https://www.google.com/',
+                    'sec-ch-ua': '"Google Chrome";v="91", "Chromium";v="91"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-fetch-dest': 'image',
+                    'sec-fetch-mode': 'no-cors',
+                    'sec-fetch-site': 'cross-site'
+                }
+                
+                # Create a session for all downloads
+                async with aiohttp.ClientSession() as session:
+                    for i, image_url in enumerate(product_data['images']):
+                        try:
+                            if not image_url or not isinstance(image_url, str):
+                                self.logger.warning(f"Invalid image URL at index {i}, skipping")
+                                continue
+                                
+                            self.logger.warning(f"Downloading image {i}: {image_url}")
+                            # Check if this is a local file path
+                            if image_url.startswith('/') or image_url.startswith('./'):
+                                # If it's a local file, just add it to media_files
+                                if os.path.exists(image_url):
+                                    self.logger.warning(f"Using existing local file: {image_url}")
+                                    media_files['images'].append(image_url)
+                                else:
+                                    self.logger.warning(f"Local file not found: {image_url}")
+                                continue
+                            # Download the image
+                            async with session.get(image_url, headers=headers, timeout=30) as response:
+                                if response.status == 200:
+                                    # Read image data
+                                    image_data = await response.read()
+                                    
+                                    # Convert to numpy array
+                                    image_array = np.asarray(bytearray(image_data), dtype=np.uint8)
+                                    image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+                                    
+                                    if image is not None:
+                                        # Save the image
+                                        image_path = os.path.join(self.temp_dir, f"image_{i}.jpg")
+                                        self.logger.warning(f"Saving image to: {image_path}")
+                                        success = cv2.imwrite(image_path, image)
+                                        
+                                        if success:
+                                            # Verify the saved image
+                                            if os.path.exists(image_path):
+                                                file_size = os.path.getsize(image_path)
+                                                self.logger.warning(f"Image {i} saved successfully. File size: {file_size} bytes")
+                                                # Add the local file path to media_files
+                                                media_files['images'].append(image_path)
+                                            else:
+                                                self.logger.warning(f"Failed to save image {i}, file not created")
+                                        else:
+                                            self.logger.warning(f"Failed to save image {i}, cv2.imwrite returned False")
+                                    else:
+                                        self.logger.warning(f"Failed to decode image {i} from URL: {image_url}")
+                                else:
+                                    self.logger.warning(f"Failed to download image {i}, status: {response.status}")
+                                    
+                        except aiohttp.ClientError as e:
+                            self.logger.error(f"Network error downloading image {i} from {image_url}: {str(e)}")
                             continue
-                            
-                        self.logger.info(f"Downloading image {i}: {image_url}")
-                        image_path = os.path.join(self.temp_dir, f"image_{i}.jpg")
-                        
-                        # Use requests with proper headers
-                        import requests
-                        headers = {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                            'Accept': '*/*'
-                        }
-                        response = requests.get(image_url, stream=True, timeout=10, headers=headers)
-                        
-                        if response.status_code == 200:
-                            # Save the image
-                            with open(image_path, 'wb') as f:
-                                for chunk in response.iter_content(chunk_size=8192):
-                                    if chunk:
-                                        f.write(chunk)
-                            
-                            # Validate saved image
-                            if os.path.exists(image_path):
-                                file_size = os.path.getsize(image_path)
-                                self.logger.info(f"Image {i} saved. File size: {file_size} bytes")
-                                media_files['images'].append(image_path)
-                            else:
-                                self.logger.warning(f"Failed to save image {i}, file not created")
-                        else:
-                            self.logger.warning(f"Failed to download image {i}, status: {response.status_code}")
-                    except Exception as e:
-                        self.logger.error(f"Error downloading image {i}: {str(e)}")
-                        continue
+                        except Exception as e:
+                            self.logger.error(f"Error downloading image {i} from {image_url}: {str(e)}")
+                            continue
             else:
                 self.logger.warning("No images found in product data")
             
             # If no images were downloaded, create a black screen
             if not media_files['images']:
                 self.logger.warning("No images downloaded, creating a black screen")
-                from moviepy.editor import ColorClip
-                color_clip = ColorClip(size=(1920, 1080), color=(0, 0, 0))
-                color_path = os.path.join(self.temp_dir, "color_clip.jpg")
-                color_clip.save_frame(color_path, t=0)
-                media_files['images'].append(color_path)
+                black_screen = np.zeros((1080, 1920, 3), dtype=np.uint8)
+                black_screen_path = os.path.join(self.temp_dir, "black_screen.jpg")
+                cv2.imwrite(black_screen_path, black_screen)
+                media_files['images'].append(black_screen_path)
                 self.logger.info("Created black screen as fallback")
             
+            self.logger.warning(f"Downloaded {len(media_files['images'])} images successfully")
             return media_files
             
         except Exception as e:
             self.logger.error(f"Error in media download: {str(e)}")
-            raise Exception(f"Error downloading media: {str(e)}")
-
-    async def _cleanup_media(self, media_files: Dict[str, List[str]]) -> None:
-        """Clean up downloaded media files."""
-        try:
-            self.logger.info("Cleaning up media files")
-            for image_path in media_files.get('images', []):
-                try:
-                    if os.path.exists(image_path):
-                        os.remove(image_path)
-                except Exception as e:
-                    self.logger.error(f"Error removing image {image_path}: {str(e)}")
-            
-            if media_files.get('audio'):
-                try:
-                    if os.path.exists(media_files['audio']):
-                        os.remove(media_files['audio'])
-                except Exception as e:
-                    self.logger.error(f"Error removing audio file: {str(e)}")
-            
-            self.logger.info("Media cleanup completed")
-        except Exception as e:
-            self.logger.error(f"Error in media cleanup: {str(e)}")
-
-    def _create_video_clip(self, media_files: Dict[str, List[str]], script: List[Dict]) -> str:
-        """Create video clip from media files and script."""
-        try:
-            self.logger.info("Starting video creation")
-            from moviepy.editor import ImageClip, TextClip, CompositeVideoClip, concatenate_videoclips
-            
-            clips = []
-            scene_duration = 30  # Fixed duration for each scene
-            
-            # Process each scene
-            for i, scene in enumerate(script):
-                try:
-                    # Get corresponding image
-                    if i < len(media_files['images']):
-                        image_path = media_files['images'][i]
-                        self.logger.info(f"Processing image {i}: {image_path}")
-                        
-                        # Create image clip
-                        image_clip = ImageClip(image_path)
-                        image_clip = image_clip.set_duration(scene_duration)
-                        
-                        # Add text if present
-                        if 'text' in scene and scene['text']:
-                            text_clip = TextClip(
-                                scene['text'],
-                                fontsize=70,
-                                color='white',
-                                font='Arial'
-                            )
-                            text_clip = text_clip.set_duration(scene_duration)
-                            text_clip = text_clip.set_position('center')
-                            
-                            # Combine image and text
-                            scene_clip = CompositeVideoClip([image_clip, text_clip])
-                        else:
-                            scene_clip = image_clip
-                        
-                        clips.append(scene_clip)
-                        self.logger.info(f"Added scene {i}")
-                    else:
-                        self.logger.warning(f"No image available for scene {i}")
-                
-                except Exception as scene_err:
-                    self.logger.error(f"Error processing scene {i}: {str(scene_err)}")
-                    continue
-            
-            if not clips:
-                raise ValueError("No valid clips were created")
-            
-            # Concatenate all clips
-            final_clip = concatenate_videoclips(clips)
-            
-            # Save the final video
-            output_path = os.path.join(self.output_dir, "output.mp4")
-            final_clip.write_videofile(
-                output_path,
-                fps=30,
-                codec='libx264',
-                audio=False,
-                preset='medium',
-                threads=2
-            )
-            
-            self.logger.info(f"Video saved to {output_path}")
-            
-            # Clean up clips
-            for clip in clips:
-                clip.close()
-            final_clip.close()
-            
-            return output_path
-            
-        except Exception as e:
-            self.logger.error(f"Error in video creation: {str(e)}")
-            raise Exception(f"Error creating video: {str(e)}") 
+            raise Exception(f"Error downloading media: {str(e)}") 
