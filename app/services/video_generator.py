@@ -12,6 +12,8 @@ import tempfile
 import shutil
 import textwrap
 import subprocess
+from gtts import gTTS
+from pydub import AudioSegment
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,10 @@ class VideoGenerator:
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.font_scale = 0.8  # Reduced font scale
         self.font_thickness = 1  # Reduced font thickness
+        
+        # Audio settings
+        self.audio_fade_duration = 500  # milliseconds
+        self.audio_padding = 0.5  # seconds
         
         self.logger.info("VideoGenerator initialized")
         
@@ -318,6 +324,7 @@ class VideoGenerator:
             # Create video
             output_path = os.path.join(self.output_dir, f"video_{uuid.uuid4()}.mp4")
             temp_output = os.path.join(self.temp_dir, "temp_output.mp4")
+            temp_audio = os.path.join(self.temp_dir, "temp_audio.mp3")
             
             # Get dimensions from first image
             first_image = cv2.imread(media_files['images'][0])
@@ -332,6 +339,23 @@ class VideoGenerator:
             
             if not video_writer.isOpened():
                 raise Exception("Failed to create video writer")
+
+            # Generate voice overs for each scene
+            audio_segments = []
+            for scene in scenes:
+                try:
+                    # Generate voice over for the scene
+                    audio_path = self._generate_voice_over(scene['description'])
+                    if audio_path:
+                        audio_segments.append(AudioSegment.from_mp3(audio_path))
+                except Exception as e:
+                    self.logger.warning(f"Failed to generate voice over for scene: {str(e)}")
+            
+            # Combine audio segments if we have any
+            if audio_segments:
+                final_audio = sum(audio_segments)
+                final_audio.export(temp_audio, format="mp3")
+                self.logger.info("Voice over audio generated successfully")
             
             # Process each scene
             for scene in scenes:
@@ -369,54 +393,62 @@ class VideoGenerator:
             # Release video writer
             video_writer.release()
             
-            # Convert to MP4 with ffmpeg
-            try:
-                ffmpeg_cmd = [
-                    'ffmpeg', '-y',  # Overwrite output file if it exists
-                    '-i', temp_output,
-                    '-c:v', 'libx264',
-                    '-preset', 'medium',
-                    '-crf', '23',
-                    '-movflags', '+faststart',  # Enable fast start for web playback
-                    output_path
-                ]
-                
-                process = await asyncio.create_subprocess_exec(
-                    *ffmpeg_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                
-                stdout, stderr = await process.communicate()
-                
-                if process.returncode != 0:
-                    self.logger.error(f"FFmpeg error: {stderr.decode()}")
-                    raise Exception(f"FFmpeg conversion failed: {stderr.decode()}")
+            # Combine video and audio if we have audio
+            if os.path.exists(temp_audio):
+                try:
+                    ffmpeg_cmd = [
+                        'ffmpeg', '-y',
+                        '-i', temp_output,
+                        '-i', temp_audio,
+                        '-c:v', 'copy',
+                        '-c:a', 'aac',
+                        '-b:a', '192k',
+                        '-ar', '44100',
+                        '-ac', '2',
+                        '-shortest',
+                        '-movflags', '+faststart',
+                        output_path
+                    ]
                     
-                # Verify the output file
-                if not os.path.exists(output_path):
-                    raise Exception("FFmpeg conversion failed: Output file not created")
+                    process = await asyncio.create_subprocess_exec(
+                        *ffmpeg_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
                     
-                file_size = os.path.getsize(output_path)
-                if file_size == 0:
-                    raise Exception("FFmpeg conversion failed: Output file is empty")
+                    stdout, stderr = await process.communicate()
                     
-                self.logger.info(f"Video generated successfully. File size: {file_size} bytes")
-                
-            except Exception as e:
-                self.logger.error(f"Error in ffmpeg conversion: {str(e)}")
-                raise Exception(f"Error converting video: {str(e)}")
+                    if process.returncode != 0:
+                        self.logger.error(f"FFmpeg error: {stderr.decode()}")
+                        raise Exception(f"FFmpeg conversion failed: {stderr.decode()}")
+                except Exception as e:
+                    self.logger.error(f"Error combining video and audio: {str(e)}")
+                    # If audio combination fails, just use the video
+                    os.rename(temp_output, output_path)
+            else:
+                # If no audio, just use the video
+                os.rename(temp_output, output_path)
             
+            # Verify the output file
+            if not os.path.exists(output_path):
+                raise Exception("Video generation failed: Output file not created")
+                
+            file_size = os.path.getsize(output_path)
+            if file_size == 0:
+                raise Exception("Video generation failed: Output file is empty")
+                
+            self.logger.info(f"Video generated successfully. File size: {file_size} bytes")
             return output_path
-            
+                
         except Exception as e:
             self.logger.error(f"Error in video generation: {str(e)}")
             raise Exception(f"Error generating video: {str(e)}")
         finally:
             # Cleanup temporary files
             try:
-                if os.path.exists(temp_output):
-                    os.remove(temp_output)
+                for temp_file in [temp_output, temp_audio]:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
             except Exception as e:
                 self.logger.warning(f"Error cleaning up temporary files: {str(e)}")
 
@@ -575,4 +607,37 @@ class VideoGenerator:
             
         except Exception as e:
             self.logger.error(f"Error in media download: {str(e)}")
-            raise Exception(f"Error downloading media: {str(e)}") 
+            raise Exception(f"Error downloading media: {str(e)}")
+
+    def _generate_voice_over(self, text: str) -> Optional[str]:
+        """Generate voice over for text using gTTS"""
+        try:
+            if not text:
+                return None
+                
+            # Create output directory if it doesn't exist
+            os.makedirs(self.temp_dir, exist_ok=True)
+            
+            # Generate unique filename
+            output_path = os.path.join(self.temp_dir, f"voice_over_{uuid.uuid4()}.mp3")
+            
+            # Generate speech with faster rate
+            tts = gTTS(text=text, lang='en', slow=False)
+            tts.save(output_path)
+            
+            self.logger.info(f"Generated voice over for text: {text[:50]}...")
+            return output_path
+            
+        except Exception as e:
+            self.logger.error(f"Error generating voice over: {str(e)}")
+            return None
+
+    def cleanup(self):
+        """Clean up temporary files"""
+        try:
+            for file in os.listdir(self.temp_dir):
+                file_path = os.path.join(self.temp_dir, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+        except Exception as e:
+            logging.error(f"Error cleaning up temporary files: {str(e)}") 
