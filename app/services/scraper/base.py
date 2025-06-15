@@ -33,25 +33,6 @@ class BaseScraper(ABC):
             logger.error(f"Error fetching page: {str(e)}")
             return None
 
-    @abstractmethod
-    async def extract_product_info(self, url: str) -> Dict:
-        """
-        Extract product information from the given URL.
-        Returns a dictionary containing:
-        - title: str
-        - description: str
-        - price: float
-        - images: List[str]
-        - features: List[str]
-        - brand: str
-        """
-        pass
-
-    @abstractmethod
-    def can_handle_url(self, url: str) -> bool:
-        """Check if this scraper can handle the given URL."""
-        pass
-
     def parse_html(self, html: str) -> Optional[BeautifulSoup]:
         """Parse HTML content."""
         try:
@@ -66,14 +47,3 @@ class BaseScraper(ABC):
         except Exception as e:
             logger.error(f"Error parsing HTML: {str(e)}")
             return None
-
-    async def download_image(self, image_url: str) -> Optional[bytes]:
-        """Download an image from the given URL."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(image_url, headers=self.headers) as response:
-                    if response.status == 200:
-                        return await response.read()
-        except Exception:
-            return None
-        return None 

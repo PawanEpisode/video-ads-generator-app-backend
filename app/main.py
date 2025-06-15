@@ -6,8 +6,6 @@ from fastapi.staticfiles import StaticFiles
 import os
 from pathlib import Path
 from .core.config import settings
-from .api.routes.scraper import router as scraper_router
-from .api.routes.product import router as product_router
 from .api.endpoints.url_to_video import router as url_to_video_router
 
 # Create necessary directories
@@ -56,18 +54,6 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/videos", StaticFiles(directory=str(VIDEOS_DIR)), name="videos")
 
 # Include routers
-app.include_router(
-    scraper_router,
-    prefix=f"{settings.API_V1_STR}/scraper",
-    tags=["scraper"]
-)
-
-app.include_router(
-    product_router,
-    prefix=f"{settings.API_V1_STR}/products",
-    tags=["products"]
-)
-
 app.include_router(
     url_to_video_router,
     prefix=f"{settings.API_V1_STR}/url-to-video",
