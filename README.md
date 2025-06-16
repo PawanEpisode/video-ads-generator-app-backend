@@ -65,6 +65,12 @@ The backend is built with FastAPI and handles video generation from product imag
 
    copy the env variables from .env.example file
    ```
+   # Note: OpenAI API Key Setup
+   - Create an account on [OpenAI](https://platform.openai.com/signup)
+   - Once logged in, go to [API Keys](https://platform.openai.com/api-keys)
+   - Click "Create new secret key"
+   - Copy the generated API key (Note: You won't be able to see it again)
+   - Add it to your .env file as `OPENAI_API_KEY=your_api_key_here`
 
 5. **Create Required Directories**
    ```bash
@@ -219,12 +225,7 @@ class VideoGenerator:
    python-multipart
    ```
 
-2. **Environment Variables**
-
-   - `TEMP_DIR`: Directory for temporary files
-   - `OUTPUT_DIR`: Directory for generated videos
-
-3. **FFmpeg Requirements**
+2. **FFmpeg Requirements**
    - Must be installed on the system
    - Used for video encoding
    - Supports H.264 codec
@@ -273,19 +274,6 @@ class VideoGenerator:
    - Input validation
    - Error message sanitization
    - Proper CORS handling
-
-## Testing
-
-1. **Unit Tests**
-
-   - Image processing
-   - Text overlay
-   - Video generation
-
-2. **Integration Tests**
-   - API endpoints
-   - File handling
-   - Error scenarios
 
 ## Contributing
 
