@@ -1,8 +1,7 @@
-from typing import Dict, List, Optional
+from typing import Dict, List
 import re
 from .base import BaseScraper
 import logging
-from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
@@ -36,41 +35,10 @@ class ShopifyScraper(BaseScraper):
         ]
         return any(re.search(pattern, url) for pattern in patterns)
 
-    async def fetch_page_playwright(self, url: str, timeout: int = 30000) -> str:
-        """Fetch page content using Playwright for dynamic content."""
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-                
-                # Set viewport size
-                await page.set_viewport_size({"width": 1920, "height": 1080})
-                
-                # Navigate to the page and wait for network idle
-                await page.goto(url, wait_until="networkidle", timeout=timeout)
-                
-                # Wait for any dynamic content to load
-                await page.wait_for_load_state("domcontentloaded")
-                
-                # Get the page content
-                content = await page.content()
-                
-                # Close browser
-                await browser.close()
-                
-                return content
-        except Exception as e:
-            logger.error(f"Error fetching page with Playwright: {str(e)}")
-            return ""
-
-    async def extract_product_info(self, url: str, use_playwright: bool = True) -> Dict:
+    async def extract_product_info(self, url: str) -> Dict:
         """Extract product information from a Shopify store."""
         try:
-            # Use Playwright for dynamic content by default
-            if use_playwright:
-                html = await self.fetch_page_playwright(url)
-            else:
-                html = await self.fetch_page(url)
+            html = await self.fetch_page(url)
                 
             if not html:
                 raise ValueError("Failed to fetch the product page")

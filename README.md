@@ -42,7 +42,7 @@ The backend is built with FastAPI and handles video generation from product imag
 
    ```bash
    # Using venv
-   python -m venv venv
+   python3 -m venv venv
 
    # Activate virtual environment
    # On macOS/Linux:
@@ -54,7 +54,7 @@ The backend is built with FastAPI and handles video generation from product imag
 3. **Install Dependencies**
 
    ```bash
-   pip install -r requirements.txt
+   pip3 install -r requirements.txt
    ```
 
 4. **Set Up Environment Variables**
